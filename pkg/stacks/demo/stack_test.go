@@ -21,7 +21,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func synth(t *testing.T) assertions.Template {
+func synth(t *testing.T) (assertions.Template, string) {
 	t.Helper()
 	app := awscdk.NewApp(nil)
 	authorizerStack := awscdk.NewStack(app, jsii.String("Authorizer"), nil)
@@ -35,7 +35,22 @@ func synth(t *testing.T) assertions.Template {
 	if err != nil {
 		t.Fatalf("NewStack: %v", err)
 	}
-	return assertions.Template_FromStack(stack, nil)
+	return assertions.Template_FromStack(stack, nil), exportedArn(t, authorizerStack, authorizerLambda)
+}
+
+func exportedArn(t *testing.T, stack awscdk.Stack, fn awslambda.Function) string {
+	t.Helper()
+	lambdaID := stack.GetLogicalId(fn.Node().DefaultChild().(awscdk.CfnElement))
+	outputs := *assertions.Template_FromStack(stack, nil).FindOutputs(jsii.String("*"), obj{
+		"Value": obj{"Fn::GetAtt": arr{*lambdaID, "Arn"}},
+	})
+	if len(outputs) != 1 {
+		t.Fatalf("expected exactly one output exporting the lambda ARN, got %d", len(outputs))
+	}
+	for _, output := range outputs {
+		return (*output)["Export"].(obj)["Name"].(string)
+	}
+	return ""
 }
 
 func singleLogicalID(t *testing.T, template assertions.Template, resourceType string) string {
@@ -51,7 +66,7 @@ func singleLogicalID(t *testing.T, template assertions.Template, resourceType st
 }
 
 func TestRequestAuthorizerUsesAuthorizerLambda(t *testing.T) {
-	template := synth(t)
+	template, authorizerArnExport := synth(t)
 
 	template.HasResourceProperties(jsii.String("AWS::ApiGateway::Authorizer"), obj{
 		"Type":           "REQUEST",
@@ -60,14 +75,14 @@ func TestRequestAuthorizerUsesAuthorizerLambda(t *testing.T) {
 		"RestApiId":      obj{"Ref": singleLogicalID(t, template, "AWS::ApiGateway::RestApi")},
 		"AuthorizerUri": obj{"Fn::Join": arr{"", assertions.Match_ArrayWith(&arr{
 			":lambda:path/2015-03-31/functions/",
-			obj{"Fn::ImportValue": assertions.Match_StringLikeRegexp(jsii.String(`^Authorizer:ExportsOutputFnGetAttAuthorizerLambda.*Arn`))},
+			obj{"Fn::ImportValue": authorizerArnExport},
 			"/invocations",
 		})}},
 	})
 }
 
 func TestRootMethodProtectedByAuthorizer(t *testing.T) {
-	template := synth(t)
+	template, _ := synth(t)
 
 	template.HasResourceProperties(jsii.String("AWS::ApiGateway::Method"), obj{
 		"HttpMethod":        "GET",
@@ -78,15 +93,15 @@ func TestRootMethodProtectedByAuthorizer(t *testing.T) {
 }
 
 func TestApiAndStage(t *testing.T) {
-	template := synth(t)
+	template, _ := synth(t)
 
 	template.HasResourceProperties(jsii.String("AWS::ApiGateway::RestApi"), obj{"Name": "SampleAPI", "Description": "Sample API"})
 	template.HasResourceProperties(jsii.String("AWS::ApiGateway::Stage"), obj{"StageName": "test"})
 }
 
-// SetupPermissions is a no-op for a cross-stack imported ARN, so the invoke permission is not part of this template.
+// Pinned gap: SetupPermissions (#7) is a no-op for a cross-stack imported ARN, so no invoke permission is emitted.
 func TestNoInvokePermissionForImportedAuthorizer(t *testing.T) {
-	template := synth(t)
+	template, _ := synth(t)
 
 	template.ResourceCountIs(jsii.String("AWS::Lambda::Permission"), jsii.Number(0))
 }

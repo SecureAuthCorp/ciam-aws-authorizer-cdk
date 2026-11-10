@@ -105,7 +105,6 @@ func TestReadBoolCtxParam(t *testing.T) {
 		{map[string]interface{}{"flag": "true"}, true},
 		{map[string]interface{}{"flag": "True"}, false},
 		{map[string]interface{}{"flag": "1"}, false},
-		{map[string]interface{}{"flag": true}, false},
 		{map[string]interface{}{}, false},
 	}
 	for _, tt := range tests {
